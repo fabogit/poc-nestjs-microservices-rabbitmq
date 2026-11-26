@@ -1,81 +1,148 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo_text.svg" width="320" alt="Nest Logo" /></a>
-</p>
+# poc-nestjs-microservices-rabbitmq
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> An enterprise microservices monorepo orchestrating Orders, Billing, and Authentication services using NestJS, RabbitMQ message queues, and a MongoDB replica set.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+**Inception (First Commit):** `2024-03-29` • **Batch / Horizon:** `batch-2024-h1` • **Architecture Domain:** `Distributed Message Queue / RabbitMQ Microservices`
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 📌 Architecture & Overview
 
-## Installation
+`nestJs-microservices-rabbitMQ` demonstrates a distributed, event-driven microservices architecture structured as a monorepo. It isolates business domains into autonomous microservices that communicate asynchronously using RabbitMQ message queues and synchronously using HTTP/JWT validation.
 
-```bash
-$ pnpm install
+The system topology incorporates 3 autonomous microservices and a shared library:
+1. **Orders Service (`apps/orders`):** Public-facing HTTP REST API (port 3000) that accepts order placements, verifies authentication tokens with `apps/auth`, persists orders in MongoDB, and dispatches `order_created` events to the `BILLING` RabbitMQ queue.
+2. **Billing Service (`apps/billing`):** Asynchronous background worker consuming events from the `BILLING` queue, performing billing verification, and completing manual AMQP message acknowledgments.
+3. **Auth Service (`apps/auth`):** Security microservice (port 3001) managing user registration, credential validation, Passport local/JWT strategies, and cookie-based identity tokens.
+4. **Common Library (`libs/common`):** Shared infrastructure layer encapsulating `RmqModule`, `RmqService` (with manual acknowledgment helpers), database connection providers, and base schemas.
+
+```
++---------------------------------------------------------------------------------------+
+|                            nestJs-microservices-rabbitMQ                              |
+|                                                                                       |
+|  [ HTTP Client / Postman ]                                                            |
+|         |                                                                             |
+|         | POST /orders (Bearer JWT Cookie)                                            |
+|         v                                                                             |
+|  +--------------------+       Sync HTTP Auth Guard (Validate User)                    |
+|  | Orders Service     +----------------------------------------+                      |
+|  | (Port: 3000)       |                                        |                      |
+|  +---------+----------+                                        v                      |
+|            |                                        +--------------------+            |
+|            | 1. Persist Order                       | Auth Service       |            |
+|            v                                        | (Port: 3001)       |            |
+|  +--------------------+                             +---------+----------+            |
+|  | MongoDB Replica    |                                       |                       |
+|  | Set (Primary/Sec)  |                                       v                       |
+|  +--------------------+                             +--------------------+            |
+|            |                                        | Users Collection   |            |
+|            | 2. Publish 'order_created'             +--------------------+            |
+|            v                                                                          |
+|  +--------------------+                                                               |
+|  | RabbitMQ Broker    |                                                               |
+|  | (Queue: 'BILLING') |                                                               |
+|  +---------+----------+                                                               |
+|            |                                                                          |
+|            | 3. Consume Message (Manual ACK)                                          |
+|            v                                                                          |
+|  +--------------------+                                                               |
+|  | Billing Service    | (Processes invoice, executes rmqService.ack(context))         |
+|  | (Background Worker)|                                                               |
+|  +--------------------+                                                               |
++---------------------------------------------------------------------------------------+
 ```
 
-## Running the app
+* **Context:** Distributed microservices reference architecture evaluating RabbitMQ transport decoupling, manual AMQP message acknowledgment lifecycles, and MongoDB replica set high availability.
+* **Key Patterns:**
+  * **Asynchronous Message Queuing:** Offloading long-running billing operations from the critical HTTP request path via RabbitMQ broker queues.
+  * **Manual Acknowledgment (ACK) Semantics:** Disabling auto-ack to ensure messages are re-queued if a billing worker crashes mid-transaction.
+  * **Shared Monorepo Infrastructure:** Reusable `RmqModule` providing configurable connection management via `amqp-connection-manager`.
+  * **High-Availability Database Topology:** Containerized MongoDB 8.0 cluster configured with Primary, Secondary, and Arbiter nodes.
+
+---
+
+## 🛠 Tech Stack
+
+* **Microservices Framework:** NestJS 8.4 (`@nestjs/microservices`, `@nestjs/core`, `@nestjs/common`)
+* **Message Broker:** RabbitMQ 4 (AMQP 0-9-1 via `amqplib` 0.9.1 and `amqp-connection-manager` 4.1.14)
+* **Database & Cluster:** MongoDB 8.0 Replica Set (Primary, Secondary, Arbiter via Bitnami), Mongoose 9.2.2
+* **Security & Identity:** `@nestjs/jwt` 8.0.1, `@nestjs/passport` 8.2.2, `passport-jwt`, `passport-local`, `bcrypt`
+* **Orchestration & Tooling:** Docker Compose, pnpm, Postman Collection
+
+---
+
+## ✨ Features & Microservice Roles
+
+* **Orders Service:** HTTP endpoint receiving orders with payload validation (`class-validator`) and RabbitMQ event emission.
+* **Billing Worker:** Consumer service listening on the `BILLING` queue with explicit context acknowledgment.
+* **Authentication Subsystem:** User registration, credential verification, and JWT cookie parsing.
+* **Complete Multi-Node Cluster:** Production-like `docker-compose.yml` defining full service topologies with network bridges.
+
+### Inter-Service Communication Interfaces
+
+| Source | Target | Protocol | Pattern / Queue | Payload / Event |
+|---|---|---|---|---|
+| Client | `orders` | `HTTP POST` | `/orders` | Order creation request (`CreateOrderDto`) |
+| Client | `auth` | `HTTP POST` | `/auth/login` | User credentials (`email`, `password`) |
+| `orders` | `auth` | `HTTP GET` | `/auth/user` | Synchronous cookie validation check |
+| `orders` | `billing` | `AMQP` | Queue: `BILLING` | Event: `order_created` (`Order` payload) |
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+* Docker & Docker Compose
+* Node.js `>= 18.0.0`
+* pnpm (`npm install -g pnpm`)
+
+### Installation
 
 ```bash
-# development
-$ npm run start
+# Clone the repository
+git clone https://github.com/fabogit/poc-nestjs-microservices-rabbitmq.git
+cd poc-nestjs-microservices-rabbitmq
 
-# watch mode
-$ npm run start:dev APP_NAME(auth/billing/orders)
-
-# production mode
-$ npm run start:prod
+# Install monorepo dependencies
+pnpm install
 ```
 
-## Start all microservices
+### Environment Configuration
+
+Configure environment files based on provided templates:
 
 ```bash
-docker compose up --build -V
+cp apps/auth/.env.auth.template apps/auth/.env
+cp apps/orders/.env.orders.template apps/orders/.env
+cp apps/billing/.env.billing.template apps/billing/.env
 ```
 
-and use the Postman collection to call the API, `docker compose down -v` to clear data and exit
-
-## Test
+### Running the Complete Cluster via Docker Compose
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+# Launch RabbitMQ, MongoDB Replica Set, Auth, Orders, and Billing services
+docker compose up --build
 ```
 
-## Support
+### Testing the Order & Billing Pipeline
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Execute the preconfigured Postman collection [`Nestjs-rabbitMQ.postman_collection.json`](./Nestjs-rabbitMQ.postman_collection.json) or run cURL:
 
-## Stay in touch
+```bash
+# 1. Register a user
+curl -X POST http://localhost:3001/auth/users \
+  -H "Content-Type: application/json" \
+  -d '{"email": "developer@test.com", "password": "Password123!"}'
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+# 2. Place an order (triggers RabbitMQ event to Billing)
+curl -X POST http://localhost:3000/orders \
+  -H "Content-Type: application/json" \
+  -d '{"name": "MacBook Pro", "price": 2499, "phoneNumber": "+1234567890"}'
+```
 
-## License
+---
 
-Nest is [MIT licensed](LICENSE).
+## 📄 License & Author
+
+Developed by [@fabogit](https://github.com/fabogit).
