@@ -78,7 +78,7 @@
     }
   },
   "license": "UNLICENSED",
-  "name": "ordering-app",
+  "name": "poc-nestjs-microservices-rabbitmq",
   "pnpm": {
     "onlyBuiltDependencies": [
       "@nestjs/core",
